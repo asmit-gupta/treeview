@@ -6,20 +6,16 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/spf13/cobra"
 )
 
 var respectGitignore bool
-
-func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-}
 
 type SummaryStats struct {
 	TotalFiles       int
@@ -39,63 +35,87 @@ var createMdCmd = &cobra.Command{
 	Use:   "create-md [directory]",
 	Short: "Create a markdown file with directory details",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		createMarkdown(args[0])
-	},
+	Run:   createMarkdown,
 }
 
 var printDirCmd = &cobra.Command{
 	Use:   "print-dir [directory]",
 	Short: "Print detailed directory information",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		printDirectory(args[0])
-	},
+	Run:   printDirectory,
 }
 
 func init() {
 	rootCmd.AddCommand(createMdCmd)
 	rootCmd.AddCommand(printDirCmd)
-
 	rootCmd.PersistentFlags().BoolVar(&respectGitignore, "respect-gitignore", false, "Respect .gitignore rules")
 }
 
-func createMarkdown(directory string) {
-	err := createMarkdownFile(directory)
-	if err != nil {
-		fmt.Printf("Error creating markdown: %v\n", err)
+func main() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
 
-func printDirectory(directory string) {
+func createMarkdown(cmd *cobra.Command, args []string) {
 	startTime := time.Now()
 
-	tree, err := buildDirectoryTreeParallel(directory, respectGitignore)
+	tree, err := buildDirectoryTreeParallel(args[0], respectGitignore)
 	if err != nil {
-		fmt.Printf("Error getting directory contents: %v\n", err)
+		fmt.Printf("Error building directory tree: %v\n", err)
 		return
 	}
 
-	fmt.Println(generateMarkdownTree(tree, "", true))
-
-	stats, err := calculateStats(directory)
+	stats, extensionStats, err := calculateStatsParallel(args[0], respectGitignore)
 	if err != nil {
 		fmt.Printf("Error calculating statistics: %v\n", err)
-	} else {
-		printSummaryStats(stats)
+		return
+	}
+
+	err = createMarkdownFile(args[0], tree, stats, extensionStats)
+	if err != nil {
+		fmt.Printf("Error creating markdown: %v\n", err)
+		return
 	}
 
 	elapsedTime := time.Since(startTime)
 	roundedTime := roundDuration(elapsedTime)
-	fmt.Printf("\nProcessing time: %v\n", roundedTime)
+	fmt.Printf("Markdown file created. Processing time: %v\n", roundedTime)
 }
 
-func calculateStats(rootPath string) (SummaryStats, error) {
+func calculateStatsParallel(rootPath string, respectGitignore bool) (SummaryStats, map[string]ExtensionStats, error) {
 	stats := SummaryStats{}
+	extensionStats := make(map[string]ExtensionStats)
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
 
-	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+	var matcher gitignore.Matcher
+	var err error
+	if respectGitignore {
+		matcher, err = buildGitignoreMatcher(rootPath)
+		if err != nil {
+			return stats, extensionStats, fmt.Errorf("error building gitignore matcher: %v", err)
+		}
+	}
+
+	err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		relPath, err := filepath.Rel(rootPath, path)
+		if err != nil {
+			return err
+		}
+
+		if respectGitignore && matcher != nil {
+			if matcher.Match(strings.Split(relPath, string(os.PathSeparator)), info.IsDir()) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 
 		if info.IsDir() {
@@ -104,29 +124,60 @@ func calculateStats(rootPath string) (SummaryStats, error) {
 			stats.TotalFiles++
 			stats.TotalSize += info.Size()
 
-			if isTextFile(path) {
+			ext := strings.ToLower(filepath.Ext(path))
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
 				lines, comments, codeLines := analyzeFile(path)
+				mutex.Lock()
 				stats.TotalLines += lines
 				stats.TotalComments += comments
 				stats.TotalCodeLines += codeLines
-			}
+				extStat := extensionStats[ext]
+				extStat.FileCount++
+				extStat.TotalLines += lines
+				extensionStats[ext] = extStat
+				mutex.Unlock()
+			}()
 		}
 
 		return nil
 	})
 
-	return stats, err
+	wg.Wait()
+
+	return stats, extensionStats, err
 }
 
-func isTextFile(filePath string) bool {
-	// Check file extensions (you can expand this list based on your needs)
-	extensions := []string{".go", ".py", ".dart", ".js", ".java", ".c", ".cpp", ".sh", ".txt"}
-	for _, ext := range extensions {
-		if strings.HasSuffix(filePath, ext) {
-			return true
-		}
+type ExtensionStats struct {
+	FileCount      int
+	TotalLines     int
+	TotalComments  int
+	TotalCodeLines int
+}
+
+func printDirectory(cmd *cobra.Command, args []string) {
+	startTime := time.Now()
+
+	tree, err := buildDirectoryTreeParallel(args[0], respectGitignore)
+	if err != nil {
+		fmt.Printf("Error getting directory contents: %v\n", err)
+		return
 	}
-	return false
+
+	fmt.Println(generateMarkdownTree(tree, "", true))
+
+	stats, extensionStats, err := calculateStatsParallel(args[0], respectGitignore)
+	if err != nil {
+		fmt.Printf("Error calculating statistics: %v\n", err)
+	} else {
+		printPrettySummaryStats(stats)
+		printPrettyExtensionStats(extensionStats)
+	}
+
+	elapsedTime := time.Since(startTime)
+	roundedTime := roundDuration(elapsedTime)
+	fmt.Printf("\nProcessing time: %v\n", roundedTime)
 }
 
 func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int) {
@@ -139,28 +190,72 @@ func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int
 
 	scanner := bufio.NewScanner(file)
 	inBlockComment := false
+	ext := strings.ToLower(filepath.Ext(filePath))
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		trimmedLine := strings.TrimSpace(line)
 		totalLines++
 
-		trimmedLine := strings.TrimSpace(line)
 		if trimmedLine == "" {
 			continue
 		}
 
-		if strings.HasPrefix(trimmedLine, "//") || strings.HasPrefix(trimmedLine, "#") {
-			totalComments++
-		} else if strings.HasPrefix(trimmedLine, "/*") {
-			totalComments++
-			inBlockComment = true
-		} else if inBlockComment {
-			totalComments++
-			if strings.HasSuffix(trimmedLine, "*/") {
-				inBlockComment = false
+		switch ext {
+		case ".go", ".java", ".js", ".ts", ".c", ".cpp", ".cs", ".h", ".cc", ".swift", ".kt", ".scala":
+			if inBlockComment {
+				totalComments++
+				if strings.Contains(trimmedLine, "*/") {
+					inBlockComment = false
+				}
+			} else if strings.HasPrefix(trimmedLine, "//") {
+				totalComments++
+			} else if strings.HasPrefix(trimmedLine, "/*") {
+				totalComments++
+				inBlockComment = true
+			} else {
+				totalCodeLines++
 			}
-		} else {
+		case ".py":
+			if strings.HasPrefix(trimmedLine, "#") {
+				totalComments++
+			} else {
+				totalCodeLines++
+			}
+		case ".html", ".xml", ".svg":
+			if strings.HasPrefix(trimmedLine, "<!--") {
+				totalComments++
+				if !strings.HasSuffix(trimmedLine, "-->") {
+					inBlockComment = true
+				}
+			} else if inBlockComment {
+				totalComments++
+				if strings.HasSuffix(trimmedLine, "-->") {
+					inBlockComment = false
+				}
+			} else {
+				totalCodeLines++
+			}
+		case ".dart":
+			if inBlockComment {
+				totalComments++
+				if strings.Contains(trimmedLine, "*/") {
+					inBlockComment = false
+				}
+			} else if strings.HasPrefix(trimmedLine, "//") {
+				totalComments++
+			} else if strings.HasPrefix(trimmedLine, "/*") {
+				totalComments++
+				inBlockComment = true
+			} else if strings.HasPrefix(trimmedLine, "///") {
+				totalComments++
+			} else {
+				totalCodeLines++
+			}
+		case ".md", ".txt", ".json", ".yaml", ".yml":
 			totalCodeLines++
+		default:
+			// For other file types, don't count comments or code lines
 		}
 	}
 
@@ -170,17 +265,6 @@ func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int
 
 	return
 }
-
-func printSummaryStats(stats SummaryStats) {
-	fmt.Printf("\nSummary Statistics:\n")
-	fmt.Printf("Total Files: %d\n", stats.TotalFiles)
-	fmt.Printf("Total Directories: %d\n", stats.TotalDirectories)
-	fmt.Printf("Total Size: %s\n", formatSize(stats.TotalSize))
-	fmt.Printf("Total Lines: %d\n", stats.TotalLines)
-	fmt.Printf("Total Comments: %d\n", stats.TotalComments)
-	fmt.Printf("Total Code Lines: %d\n", stats.TotalCodeLines)
-}
-
 func formatSize(size int64) string {
 	const unit = 1024
 	if size < unit {
@@ -196,4 +280,37 @@ func formatSize(size int64) string {
 
 func roundDuration(d time.Duration) time.Duration {
 	return time.Duration(math.Round(float64(d)/float64(time.Millisecond))) * time.Millisecond
+}
+func printPrettySummaryStats(stats SummaryStats) {
+	fmt.Printf("\n%s\n", strings.Repeat("=", 40))
+	fmt.Printf("%-20s %s\n", "Summary Statistics", strings.Repeat("=", 20))
+	fmt.Printf("%s\n", strings.Repeat("=", 40))
+	fmt.Printf("%-20s %d\n", "Total Files:", stats.TotalFiles)
+	fmt.Printf("%-20s %d\n", "Total Directories:", stats.TotalDirectories)
+	fmt.Printf("%-20s %s\n", "Total Size:", formatSize(stats.TotalSize))
+	fmt.Printf("%-20s %d\n", "Total Lines:", stats.TotalLines)
+	fmt.Printf("%-20s %d\n", "Total Comments:", stats.TotalComments)
+	fmt.Printf("%-20s %d\n", "Total Code Lines:", stats.TotalCodeLines)
+	fmt.Printf("%s\n", strings.Repeat("=", 40))
+}
+
+func printPrettyExtensionStats(extensionStats map[string]ExtensionStats) {
+	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
+	fmt.Printf("%-20s %s\n", "File Extension Statistics", strings.Repeat("=", 60))
+	fmt.Printf("%s\n", strings.Repeat("=", 80))
+	fmt.Printf("%-10s %-12s %-12s %-12s %-12s\n", "Extension", "File Count", "Total Lines", "Comments", "Code Lines")
+	fmt.Printf("%s\n", strings.Repeat("-", 80))
+
+	// Create a sorted list of extensions
+	var extensions []string
+	for ext := range extensionStats {
+		extensions = append(extensions, ext)
+	}
+	sort.Strings(extensions)
+
+	for _, ext := range extensions {
+		stats := extensionStats[ext]
+		fmt.Printf("%-10s %-12d %-12d %-12d %-12d\n", ext, stats.FileCount, stats.TotalLines, stats.TotalComments, stats.TotalCodeLines)
+	}
+	fmt.Printf("%s\n", strings.Repeat("=", 80))
 }
