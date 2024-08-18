@@ -6,54 +6,81 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/fatih/color"
 )
 
 func createMarkdownFile(directory string, tree *FileNode, stats SummaryStats, extensionStats map[string]ExtensionStats) error {
 	var sb strings.Builder
 
-	// Write the header
 	sb.WriteString("# Directory Structure Analysis\n\n")
 
-	// Write the directory tree
 	sb.WriteString("## Directory Tree\n\n")
 	sb.WriteString("```\n")
 	sb.WriteString(generateMarkdownTree(tree, "", true))
 	sb.WriteString("```\n\n")
 
-	// Write the summary statistics
 	sb.WriteString("## Summary Statistics\n\n")
-	sb.WriteString("```\n")
-	sb.WriteString(fmt.Sprintf("%-20s %d\n", "Total Files:", stats.TotalFiles))
-	sb.WriteString(fmt.Sprintf("%-20s %d\n", "Total Directories:", stats.TotalDirectories))
-	sb.WriteString(fmt.Sprintf("%-20s %s\n", "Total Size:", formatSize(stats.TotalSize)))
-	sb.WriteString(fmt.Sprintf("%-20s %d\n", "Total Lines:", stats.TotalLines))
-	sb.WriteString(fmt.Sprintf("%-20s %d\n", "Total Comments:", stats.TotalComments))
-	sb.WriteString(fmt.Sprintf("%-20s %d\n", "Total Code Lines:", stats.TotalCodeLines))
-	sb.WriteString("```\n")
+	sb.WriteString("| Statistic         | Value                |\n")
+	sb.WriteString("|-------------------|----------------------|\n")
+	sb.WriteString(fmt.Sprintf("| Total Files        | %-20d |\n", stats.TotalFiles))
+	sb.WriteString(fmt.Sprintf("| Total Directories  | %-20d |\n", stats.TotalDirectories))
+	sb.WriteString(fmt.Sprintf("| Total Size         | %-20s |\n", formatSize(stats.TotalSize)))
+	sb.WriteString(fmt.Sprintf("| Total Lines        | %-20d |\n", stats.TotalLines))
+	sb.WriteString(fmt.Sprintf("| Total Comments     | %-20d |\n", stats.TotalComments))
+	sb.WriteString(fmt.Sprintf("| Total Code Lines   | %-20d |\n", stats.TotalCodeLines))
+	sb.WriteString("\n")
 
-	// Write the file extension statistics
-	sb.WriteString("\n## File Extension Statistics\n\n")
-	sb.WriteString("```\n")
-	sb.WriteString(fmt.Sprintf("%-10s %-12s %-12s %-12s %-12s\n", "Extension", "File Count", "Total Lines", "Comments", "Code Lines"))
-	sb.WriteString(fmt.Sprintf("%s\n", strings.Repeat("-", 80)))
+	sb.WriteString("## File Extension Statistics\n\n")
 
-	// Create a sorted list of extensions
+	maxExtWidth := len("Extension")
+	maxFileCountWidth := len("File Count")
+	maxTotalLinesWidth := len("Total Lines")
+	maxCommentsWidth := len("Comments")
+	maxCodeLinesWidth := len("Code Lines")
+
+	for ext, stat := range extensionStats {
+		extName := ext
+		if extName == "" {
+			extName = "(no extension)"
+		}
+		maxExtWidth = max(maxExtWidth, len(extName))
+		maxFileCountWidth = max(maxFileCountWidth, len(fmt.Sprintf("%d", stat.FileCount)))
+		maxTotalLinesWidth = max(maxTotalLinesWidth, len(fmt.Sprintf("%d", stat.TotalLines)))
+		maxCommentsWidth = max(maxCommentsWidth, len(fmt.Sprintf("%d", stat.TotalComments)))
+		maxCodeLinesWidth = max(maxCodeLinesWidth, len(fmt.Sprintf("%d", stat.TotalCodeLines)))
+	}
+
+	headerFormat := fmt.Sprintf("| %%-%ds | %%-%ds | %%-%ds | %%-%ds | %%-%ds |\n",
+		maxExtWidth, maxFileCountWidth, maxTotalLinesWidth, maxCommentsWidth, maxCodeLinesWidth)
+	sb.WriteString(fmt.Sprintf(headerFormat, "Extension", "File Count", "Total Lines", "Comments", "Code Lines"))
+
+	separatorFormat := fmt.Sprintf("|%%-%ds|%%-%ds|%%-%ds|%%-%ds|%%-%ds|\n",
+		maxExtWidth+2, maxFileCountWidth+2, maxTotalLinesWidth+2, maxCommentsWidth+2, maxCodeLinesWidth+2)
+	sb.WriteString(fmt.Sprintf(separatorFormat,
+		strings.Repeat("-", maxExtWidth+2),
+		strings.Repeat("-", maxFileCountWidth+2),
+		strings.Repeat("-", maxTotalLinesWidth+2),
+		strings.Repeat("-", maxCommentsWidth+2),
+		strings.Repeat("-", maxCodeLinesWidth+2)))
+
 	var extensions []string
 	for ext := range extensionStats {
 		extensions = append(extensions, ext)
 	}
 	sort.Strings(extensions)
 
-	// Write the sorted extension statistics
+	rowFormat := fmt.Sprintf("| %%-%ds | %%%dd | %%%dd | %%%dd | %%%dd |\n",
+		maxExtWidth, maxFileCountWidth, maxTotalLinesWidth, maxCommentsWidth, maxCodeLinesWidth)
 	for _, ext := range extensions {
 		extStat := extensionStats[ext]
-		sb.WriteString(fmt.Sprintf("%-10s %-12d %-12d %-12d %-12d\n", ext, extStat.FileCount, extStat.TotalLines, extStat.TotalComments, extStat.TotalCodeLines))
+		extName := ext
+		if extName == "" {
+			extName = "(no extension)"
+		}
+		sb.WriteString(fmt.Sprintf(rowFormat,
+			extName, extStat.FileCount, extStat.TotalLines, extStat.TotalComments, extStat.TotalCodeLines))
 	}
-	sb.WriteString("```\n")
+	sb.WriteString("\n")
 
-	// Write the content to the file
 	outputFile := filepath.Join(directory, "directory_structure.md")
 	err := os.WriteFile(outputFile, []byte(sb.String()), 0644)
 	if err != nil {
@@ -64,26 +91,31 @@ func createMarkdownFile(directory string, tree *FileNode, stats SummaryStats, ex
 	return nil
 }
 
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func generateMarkdownTree(node *FileNode, prefix string, isLast bool) string {
 	var sb strings.Builder
 
 	if node.Name != "" {
 		sb.WriteString(prefix)
 		if isLast {
-			sb.WriteString("|_ ")
-			prefix += "   "
+			sb.WriteString("└── ")
+			prefix += "    "
 		} else {
-			sb.WriteString("|_ ")
-			prefix += "|  "
+			sb.WriteString("├── ")
+			prefix += "│   "
 		}
 
 		if node.IsDir {
-			color.New(color.FgBlue, color.Bold).Fprintf(&sb, "%s", node.Name)
+			sb.WriteString(node.Name + "/\n")
 		} else {
-			color.New(color.FgGreen).Fprintf(&sb, "%s", node.Name)
+			sb.WriteString(node.Name + "\n")
 		}
-
-		sb.WriteString("\n")
 	}
 
 	for i, child := range node.Children {

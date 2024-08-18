@@ -26,6 +26,13 @@ type SummaryStats struct {
 	TotalCodeLines   int
 }
 
+type ExtensionStats struct {
+	FileCount      int
+	TotalLines     int
+	TotalComments  int
+	TotalCodeLines int
+}
+
 var rootCmd = &cobra.Command{
 	Use:   "TreeView",
 	Short: "A fast directory information tool",
@@ -136,6 +143,8 @@ func calculateStatsParallel(rootPath string, respectGitignore bool) (SummaryStat
 				extStat := extensionStats[ext]
 				extStat.FileCount++
 				extStat.TotalLines += lines
+				extStat.TotalComments += comments
+				extStat.TotalCodeLines += codeLines
 				extensionStats[ext] = extStat
 				mutex.Unlock()
 			}()
@@ -147,13 +156,6 @@ func calculateStatsParallel(rootPath string, respectGitignore bool) (SummaryStat
 	wg.Wait()
 
 	return stats, extensionStats, err
-}
-
-type ExtensionStats struct {
-	FileCount      int
-	TotalLines     int
-	TotalComments  int
-	TotalCodeLines int
 }
 
 func printDirectory(cmd *cobra.Command, args []string) {
@@ -204,16 +206,22 @@ func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int
 		switch ext {
 		case ".go", ".java", ".js", ".ts", ".c", ".cpp", ".cs", ".h", ".cc", ".swift", ".kt", ".scala":
 			if inBlockComment {
-				totalComments++
 				if strings.Contains(trimmedLine, "*/") {
 					inBlockComment = false
 				}
 			} else if strings.HasPrefix(trimmedLine, "//") {
 				totalComments++
+				continue
 			} else if strings.HasPrefix(trimmedLine, "/*") {
 				totalComments++
 				inBlockComment = true
-			} else {
+				if strings.Contains(trimmedLine, "*/") {
+					inBlockComment = false
+				}
+				continue
+			}
+
+			if !inBlockComment {
 				totalCodeLines++
 			}
 		case ".py":
@@ -229,7 +237,6 @@ func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int
 					inBlockComment = true
 				}
 			} else if inBlockComment {
-				totalComments++
 				if strings.HasSuffix(trimmedLine, "-->") {
 					inBlockComment = false
 				}
@@ -238,24 +245,28 @@ func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int
 			}
 		case ".dart":
 			if inBlockComment {
-				totalComments++
 				if strings.Contains(trimmedLine, "*/") {
 					inBlockComment = false
 				}
-			} else if strings.HasPrefix(trimmedLine, "//") {
+			} else if strings.HasPrefix(trimmedLine, "//") || strings.HasPrefix(trimmedLine, "///") {
 				totalComments++
+				continue
 			} else if strings.HasPrefix(trimmedLine, "/*") {
 				totalComments++
 				inBlockComment = true
-			} else if strings.HasPrefix(trimmedLine, "///") {
-				totalComments++
-			} else {
+				if strings.Contains(trimmedLine, "*/") {
+					inBlockComment = false
+				}
+				continue
+			}
+
+			if !inBlockComment {
 				totalCodeLines++
 			}
 		case ".md", ".txt", ".json", ".yaml", ".yml":
 			totalCodeLines++
 		default:
-			// For other file types, don't count comments or code lines
+			// For other file types, not counting comments or code lines; because I don't know what else to do right now
 		}
 	}
 
@@ -265,6 +276,7 @@ func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int
 
 	return
 }
+
 func formatSize(size int64) string {
 	const unit = 1024
 	if size < unit {
@@ -281,6 +293,7 @@ func formatSize(size int64) string {
 func roundDuration(d time.Duration) time.Duration {
 	return time.Duration(math.Round(float64(d)/float64(time.Millisecond))) * time.Millisecond
 }
+
 func printPrettySummaryStats(stats SummaryStats) {
 	fmt.Printf("\n%s\n", strings.Repeat("=", 40))
 	fmt.Printf("%-20s %s\n", "Summary Statistics", strings.Repeat("=", 20))
@@ -301,7 +314,6 @@ func printPrettyExtensionStats(extensionStats map[string]ExtensionStats) {
 	fmt.Printf("%-10s %-12s %-12s %-12s %-12s\n", "Extension", "File Count", "Total Lines", "Comments", "Code Lines")
 	fmt.Printf("%s\n", strings.Repeat("-", 80))
 
-	// Create a sorted list of extensions
 	var extensions []string
 	for ext := range extensionStats {
 		extensions = append(extensions, ext)
