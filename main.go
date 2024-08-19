@@ -17,6 +17,9 @@ import (
 
 var respectGitignore bool
 
+// SummaryStats holds the aggregated statistics for a directory.
+// This struct summarizes key metrics such as the total number of files,
+// directories, total size in bytes, total lines, lines of comments, and lines of code.
 type SummaryStats struct {
 	TotalFiles       int
 	TotalDirectories int
@@ -26,6 +29,9 @@ type SummaryStats struct {
 	TotalCodeLines   int
 }
 
+// ExtensionStats holds statistics for a specific file extension.
+// It tracks the number of files with the extension, as well as the total lines,
+// lines of comments, and lines of code.
 type ExtensionStats struct {
 	FileCount      int
 	TotalLines     int
