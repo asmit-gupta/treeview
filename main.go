@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/spf13/cobra"
 )
@@ -169,23 +170,24 @@ func printDirectory(cmd *cobra.Command, args []string) {
 
 	tree, err := buildDirectoryTreeParallel(args[0], respectGitignore)
 	if err != nil {
-		fmt.Printf("Error getting directory contents: %v\n", err)
+		color.Red("Error getting directory contents: %v\n", err)
 		return
 	}
 
-	fmt.Println(generateMarkdownTree(tree, "", true))
+	color.Cyan("Directory Structure:\n")
+	fmt.Println(generateColorfulMarkdownTree(tree, "", true))
 
 	stats, extensionStats, err := calculateStatsParallel(args[0], respectGitignore)
 	if err != nil {
-		fmt.Printf("Error calculating statistics: %v\n", err)
+		color.Red("Error calculating statistics: %v\n", err)
 	} else {
-		printPrettySummaryStats(stats)
-		printPrettyExtensionStats(extensionStats)
+		printColorfulSummaryStats(stats)
+		printColorfulExtensionStats(extensionStats)
 	}
 
 	elapsedTime := time.Since(startTime)
 	roundedTime := roundDuration(elapsedTime)
-	fmt.Printf("\nProcessing time: %v\n", roundedTime)
+	color.Yellow("\nProcessing time: %v\n", roundedTime)
 }
 
 func analyzeFile(filePath string) (totalLines, totalComments, totalCodeLines int) {
@@ -300,25 +302,53 @@ func roundDuration(d time.Duration) time.Duration {
 	return time.Duration(math.Round(float64(d)/float64(time.Millisecond))) * time.Millisecond
 }
 
-func printPrettySummaryStats(stats SummaryStats) {
-	fmt.Printf("\n%s\n", strings.Repeat("=", 40))
-	fmt.Printf("%-20s %s\n", "Summary Statistics", strings.Repeat("=", 20))
-	fmt.Printf("%s\n", strings.Repeat("=", 40))
-	fmt.Printf("%-20s %d\n", "Total Files:", stats.TotalFiles)
-	fmt.Printf("%-20s %d\n", "Total Directories:", stats.TotalDirectories)
-	fmt.Printf("%-20s %s\n", "Total Size:", formatSize(stats.TotalSize))
-	fmt.Printf("%-20s %d\n", "Total Lines:", stats.TotalLines)
-	fmt.Printf("%-20s %d\n", "Total Comments:", stats.TotalComments)
-	fmt.Printf("%-20s %d\n", "Total Code Lines:", stats.TotalCodeLines)
-	fmt.Printf("%s\n", strings.Repeat("=", 40))
+func generateColorfulMarkdownTree(node *FileNode, prefix string, isLast bool) string {
+	var sb strings.Builder
+
+	if node.Name != "" {
+		sb.WriteString(prefix)
+		if isLast {
+			sb.WriteString("└── ")
+			prefix += "    "
+		} else {
+			sb.WriteString("├── ")
+			prefix += "│   "
+		}
+
+		if node.IsDir {
+			sb.WriteString(color.BlueString(node.Name + "/"))
+		} else {
+			sb.WriteString(color.GreenString(node.Name))
+		}
+		sb.WriteString("\n")
+	}
+
+	for i, child := range node.Children {
+		sb.WriteString(generateColorfulMarkdownTree(child, prefix, i == len(node.Children)-1))
+	}
+
+	return sb.String()
 }
 
-func printPrettyExtensionStats(extensionStats map[string]ExtensionStats) {
-	fmt.Printf("\n%s\n", strings.Repeat("=", 80))
-	fmt.Printf("%-20s %s\n", "File Extension Statistics", strings.Repeat("=", 60))
-	fmt.Printf("%s\n", strings.Repeat("=", 80))
-	fmt.Printf("%-10s %-12s %-12s %-12s %-12s\n", "Extension", "File Count", "Total Lines", "Comments", "Code Lines")
-	fmt.Printf("%s\n", strings.Repeat("-", 80))
+func printColorfulSummaryStats(stats SummaryStats) {
+	color.Magenta("\n%s\n", strings.Repeat("=", 40))
+	color.Magenta("%-20s %s\n", "Summary Statistics", strings.Repeat("=", 20))
+	color.Magenta("%s\n", strings.Repeat("=", 40))
+	color.Cyan("%-20s %d\n", "Total Files:", stats.TotalFiles)
+	color.Cyan("%-20s %d\n", "Total Directories:", stats.TotalDirectories)
+	color.Cyan("%-20s %s\n", "Total Size:", formatSize(stats.TotalSize))
+	color.Cyan("%-20s %d\n", "Total Lines:", stats.TotalLines)
+	color.Cyan("%-20s %d\n", "Total Comments:", stats.TotalComments)
+	color.Cyan("%-20s %d\n", "Total Code Lines:", stats.TotalCodeLines)
+	color.Magenta("%s\n", strings.Repeat("=", 40))
+}
+
+func printColorfulExtensionStats(extensionStats map[string]ExtensionStats) {
+	color.Magenta("\n%s\n", strings.Repeat("=", 80))
+	color.Magenta("%-20s %s\n", "File Extension Statistics", strings.Repeat("=", 60))
+	color.Magenta("%s\n", strings.Repeat("=", 80))
+	color.Cyan("%-10s %-12s %-12s %-12s %-12s\n", "Extension", "File Count", "Total Lines", "Comments", "Code Lines")
+	color.Magenta("%s\n", strings.Repeat("-", 80))
 
 	var extensions []string
 	for ext := range extensionStats {
@@ -328,7 +358,7 @@ func printPrettyExtensionStats(extensionStats map[string]ExtensionStats) {
 
 	for _, ext := range extensions {
 		stats := extensionStats[ext]
-		fmt.Printf("%-10s %-12d %-12d %-12d %-12d\n", ext, stats.FileCount, stats.TotalLines, stats.TotalComments, stats.TotalCodeLines)
+		color.Green("%-10s %-12d %-12d %-12d %-12d\n", ext, stats.FileCount, stats.TotalLines, stats.TotalComments, stats.TotalCodeLines)
 	}
-	fmt.Printf("%s\n", strings.Repeat("=", 80))
+	color.Magenta("%s\n", strings.Repeat("=", 80))
 }
