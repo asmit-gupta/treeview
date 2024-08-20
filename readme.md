@@ -63,4 +63,4 @@ treeview create-md --help
 
 These commands will provide you with detailed information about usage and available options.
 
-![GitHub watchers](https://img.shields.io/github/watchers/asmit-gupta/treeview) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/asmit-gupta/treeview/total)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/asmit-gupta/treeview/total)
